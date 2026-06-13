@@ -168,6 +168,10 @@ def check_sentinels():
             "attachSpawnErrorHandler",
             # reject a truncated/corrupt CDS archive instead of trusting size>0 forever.
             "APP_CDS_MIN_ARCHIVE_BYTES",
+            # mongo-fallback dir creation wrapped in try/catch → surfaces disk-full/
+            # permission errors as an actionable message instead of a cryptic mongo
+            # init failure on constrained-disk machines. (round-6 coverage gap.)
+            "无法创建本地数据目录",
         ],
         # v2.5.4 启动稳健化 ②: the Job Object module itself — KILL_ON_JOB_CLOSE flag + koffi binding
         # to CreateJobObjectW / SetInformationJobObject / AssignProcessToJobObject. Reverting breaks
