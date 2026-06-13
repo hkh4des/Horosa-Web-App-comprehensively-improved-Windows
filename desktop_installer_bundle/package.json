@@ -4,7 +4,11 @@
   "private": true,
   "license": "AGPL-3.0-only",
   "description": "Horosa mature Windows desktop app bundle",
-  "author": "Horosa",
+  "homepage": "https://github.com/Horace-Maxwell/Horosa-Web-App-comprehensively-improved-Windows",
+  "author": {
+    "name": "Horosa",
+    "email": "maxwelldhx@gmail.com"
+  },
   "main": "electron/main.js",
   "scripts": {
     "build:renderer": "node scripts/build-renderer.cjs",
