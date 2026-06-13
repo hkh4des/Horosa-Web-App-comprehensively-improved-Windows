@@ -705,13 +705,21 @@ function ensureAppCdsCacheDir(context, logger) {
   }
 }
 
+// A real dynamic CDS archive for the Spring Boot jar is multiple MB; a power-loss
+// or AV-interrupted dump leaves a tiny truncated stub. Requiring a conservative
+// floor (rather than a JDK-version-fragile magic-byte constant) distinguishes the
+// two without ever false-rejecting a valid archive — and a false-reject only costs
+// a one-time re-dump next launch, never a crash (`-Xshare:auto` already tolerates
+// a bad archive, this just stops us trusting/re-using a broken stub forever).
+const APP_CDS_MIN_ARCHIVE_BYTES = 64 * 1024;
+
 function isAppCdsArchiveReady(context) {
   if (!context || !fileExists(context.archivePath)) {
     return false;
   }
 
   try {
-    return fs.statSync(context.archivePath).size > 0;
+    return fs.statSync(context.archivePath).size >= APP_CDS_MIN_ARCHIVE_BYTES;
   } catch (_error) {
     return false;
   }
@@ -1341,6 +1349,33 @@ class RuntimeManager extends EventEmitter {
     }
   }
 
+  // A spawn() that fails to even START the process emits 'error' (NOT 'exit'):
+  // ENOENT when antivirus/Defender quarantined or deleted the freshly-extracted
+  // python.exe/java.exe; EACCES when Controlled Folder Access / a security policy
+  // blocks execution from %LOCALAPPDATA%. Without a listener this throws on the
+  // ChildProcess emitter and is only caught by the process-level crash net as a
+  // generic "内部错误" dialog. Surface an actionable runtime-error instead so the
+  // user knows it's their security software, not a corrupt install.
+  attachSpawnErrorHandler(child, name, logDir) {
+    if (!child) {
+      return;
+    }
+    child.once('error', (error) => {
+      if (this.shuttingDown) {
+        return;
+      }
+      const code = error && error.code ? error.code : '';
+      const base = `${name} 本地服务无法启动：${error && error.message ? error.message : String(error)}`;
+      const hint = (code === 'ENOENT' || code === 'EACCES')
+        ? '（安全软件可能拦截或隔离了内置运行时。请将安装目录与 %LOCALAPPDATA%\\HorosaDesktop 加入杀毒软件 / Windows Defender 白名单后重试。）'
+        : '';
+      const message = `${base}${hint}`;
+      this.logger.error('Embedded runtime failed to spawn', { name, code, message: error && error.message });
+      this.updateState({ status: 'failed', message, error: message, logDir });
+      this.emit('runtime-error', new Error(message));
+    });
+  }
+
   attachUnexpectedExitHandlers(logDir) {
     const attachHandler = (serviceKey, child, name) => {
       if (!child) {
@@ -1573,6 +1608,7 @@ class RuntimeManager extends EventEmitter {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       });
+      this.attachSpawnErrorHandler(this.pythonProcess, 'Python', logDir);
       this.logStreams.push(pipeChildOutput(this.pythonProcess, pythonLog));
 
       this.updateState({
@@ -1606,6 +1642,7 @@ class RuntimeManager extends EventEmitter {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       });
+      this.attachSpawnErrorHandler(this.javaProcess, 'Java', logDir);
       this.logStreams.push(pipeChildOutput(this.javaProcess, javaLog));
 
       const outcome = await waitForServicesReadyOrExit({
@@ -1702,7 +1739,16 @@ class RuntimeManager extends EventEmitter {
           `runpy.run_path(${JSON.stringify(layout.chartScript)}, run_name='__main__')`,
         ].join('; ');
         const mongoFallbackDir = path.join(this.userDataDir, 'mongo-fallback');
-        ensureDir(mongoFallbackDir);
+        try {
+          ensureDir(mongoFallbackDir);
+        } catch (error) {
+          // Disk full / permission denied here would otherwise surface later as a
+          // cryptic mongo init failure; name the real cause.
+          const msg = `无法创建本地数据目录（${mongoFallbackDir}）：${error && error.message ? error.message : error}。请检查磁盘空间与权限。`;
+          this.logger.error('Failed to create mongo fallback dir', { dir: mongoFallbackDir, message: error && error.message });
+          this.updateState({ status: 'failed', message: msg, error: msg, logDir });
+          throw new Error(msg);
+        }
 
         // Launch both services, auto-retrying with a fresh port pair on a bind
         // conflict (v2.5.0). The crash handler is attached only AFTER the ports are

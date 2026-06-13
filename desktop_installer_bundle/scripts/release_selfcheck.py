@@ -163,6 +163,11 @@ def check_sentinels():
             # python.log/java.log size cap (one .1 generation) — they were append-only
             # with no bound.
             "rotateLogIfLarge",
+            # post-v2.6.6 local batch (ships with next release):
+            # spawn 'error' (AV-quarantine ENOENT / CFA EACCES) → actionable runtime-error.
+            "attachSpawnErrorHandler",
+            # reject a truncated/corrupt CDS archive instead of trusting size>0 forever.
+            "APP_CDS_MIN_ARCHIVE_BYTES",
         ],
         # v2.5.4 启动稳健化 ②: the Job Object module itself — KILL_ON_JOB_CLOSE flag + koffi binding
         # to CreateJobObjectW / SetInformationJobObject / AssignProcessToJobObject. Reverting breaks
@@ -209,6 +214,17 @@ def check_sentinels():
             # concurrent update checks (15s bootstrap timer / 6h interval / manual menu)
             # are serialized — re-entrant calls join the in-flight check.
             "updateCheckInFlight",
+            # post-v2.6.6 local batch (ships with next release):
+            # auto-update download stall timeout (half-open TCP can't hang forever).
+            "UPDATE_DOWNLOAD_TIMEOUT_MS",
+            # GPU software-render fallback for VMs/RDP/old-GPU blank-window class:
+            # persisted preference disables HW accel before ready; a GPU crash
+            # relaunches once into software rendering.
+            "disableHardwareAcceleration",
+            "child-process-gone",
+            # power suspend/resume + renderer-hang recovery.
+            "powerMonitor",
+            "unresponsive",
         ],
         # P0-1 (v2.5.4): Ed25519 update-signature verifier (pure node crypto, shared by main.js +
         # scripts/sign-update.cjs). Must keep the verify primitive + the embedded public key.

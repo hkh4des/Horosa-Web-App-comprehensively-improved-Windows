@@ -998,3 +998,59 @@ test('rotateLogIfLarge never throws even when stat fails', () => {
     fs.statSync = originalStat;
   }
 });
+
+// ---------------------------------------------------------------------------
+// attachSpawnErrorHandler — a spawn that can't even START the process (AV
+// quarantine = ENOENT, Controlled Folder Access / policy = EACCES) emits
+// 'error', not 'exit'; surface an actionable runtime-error instead of letting
+// it fall through to a generic crash dialog.
+// ---------------------------------------------------------------------------
+
+test('attachSpawnErrorHandler emits an actionable runtime-error with an AV hint on ENOENT', () => {
+  const logger = createLogger();
+  const runtimeManager = new RuntimeManager({ resourceRoot: 'unused', userDataDir: 'unused', logger });
+  const errors = [];
+  runtimeManager.on('runtime-error', (error) => errors.push(error));
+
+  const child = createChild(401);
+  runtimeManager.attachSpawnErrorHandler(child, 'Python', 'C:/logs');
+  const spawnError = new Error('spawn ENOENT');
+  spawnError.code = 'ENOENT';
+  child.emit('error', spawnError);
+
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /Python 本地服务无法启动/);
+  assert.match(errors[0].message, /白名单/); // AV/Defender exclusion hint present
+  assert.equal(runtimeManager.getState().status, 'failed');
+});
+
+test('attachSpawnErrorHandler stays silent during planned shutdown', () => {
+  const logger = createLogger();
+  const runtimeManager = new RuntimeManager({ resourceRoot: 'unused', userDataDir: 'unused', logger });
+  const errors = [];
+  runtimeManager.on('runtime-error', (error) => errors.push(error));
+  runtimeManager.shuttingDown = true;
+
+  const child = createChild(402);
+  runtimeManager.attachSpawnErrorHandler(child, 'Java', 'C:/logs');
+  const spawnError = new Error('spawn EACCES');
+  spawnError.code = 'EACCES';
+  child.emit('error', spawnError);
+
+  assert.equal(errors.length, 0);
+});
+
+test('attachSpawnErrorHandler omits the AV hint for non-ENOENT/EACCES errors', () => {
+  const logger = createLogger();
+  const runtimeManager = new RuntimeManager({ resourceRoot: 'unused', userDataDir: 'unused', logger });
+  const errors = [];
+  runtimeManager.on('runtime-error', (error) => errors.push(error));
+
+  const child = createChild(403);
+  runtimeManager.attachSpawnErrorHandler(child, 'Java', 'C:/logs');
+  child.emit('error', Object.assign(new Error('spawn EPIPE'), { code: 'EPIPE' }));
+
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /Java 本地服务无法启动/);
+  assert.equal(/白名单/.test(errors[0].message), false);
+});

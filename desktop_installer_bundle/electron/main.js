@@ -2,7 +2,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
-const { app, BrowserWindow, Menu, dialog, ipcMain, screen, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, powerMonitor, screen, shell } = require('electron');
 const { NsisUpdater } = require('electron-updater');
 const packageMetadata = require('../package.json');
 const { createLogger } = require('./logger');
@@ -42,6 +42,7 @@ let runtimeAutoRestartStabilityTimer = null;
 const AUTO_UPDATE_ENABLED = true;
 const AUTO_UPDATE_DISABLED_MESSAGE = '开发模式下不启用自动更新（仅打包安装后可用）。';
 const UPDATE_RECHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const UPDATE_DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000;
 
 app.setPath('userData', horosaDataRoot);
 
@@ -73,6 +74,12 @@ let lastCheckWasManual = false;
 let downloadedUpdateInfo = null;
 let updateRecheckTimer = null;
 let downloadProgressWindow = null;
+// GPU software-render fallback state. `gpuAccelerationDisabled` = HW accel was
+// turned off for THIS launch (because a prior launch persisted disableGpu);
+// `gpuRecoveryAttempted` = we already relaunched once this session for a GPU
+// crash. Both guard against a relaunch loop.
+let gpuAccelerationDisabled = false;
+let gpuRecoveryAttempted = false;
 
 function createUpdaterLogger() {
   return {
@@ -519,10 +526,78 @@ function saveWindowState() {
     bounds,
     isMaximized: false,
     zoomFactor: currentZoomFactor,
+    // Carry the GPU preference forward so a normal quit doesn't erase the flag a
+    // crash-triggered relaunch persisted (would otherwise re-enable HW accel and
+    // re-crash next launch).
+    disableGpu: gpuAccelerationDisabled,
     displayId: display ? display.id : null,
     displayScaleFactor: display ? display.scaleFactor : null,
     workArea: display ? display.workArea : null,
     updatedAt: new Date().toISOString(),
+  });
+}
+
+// F3: read the persisted GPU preference and, if a prior launch flagged this
+// machine's GPU as unusable, disable hardware acceleration BEFORE app 'ready'
+// (the only point disableHardwareAcceleration() has effect). Diverse Windows
+// GPUs / VMs / RDP / broken drivers crash Chromium's GPU process into a blank
+// window; software rendering renders correctly (slower, but visible).
+function applyPersistedGpuPreference() {
+  try {
+    const persisted = readWindowState();
+    if (persisted && persisted.disableGpu) {
+      gpuAccelerationDisabled = true;
+      app.disableHardwareAcceleration();
+    }
+  } catch (_error) {
+    // never block startup on this
+  }
+}
+
+// Persist disableGpu=true while preserving the rest of the window state (we may
+// be mid-startup with no mainWindow, so we can't use saveWindowState()).
+function persistDisableGpuFlag() {
+  let snapshot = {};
+  try {
+    snapshot = readWindowState() || {};
+  } catch (_error) {
+    snapshot = {};
+  }
+  snapshot.disableGpu = true;
+  if (!snapshot.version) {
+    snapshot.version = WINDOW_STATE_VERSION;
+  }
+  writeWindowState(snapshot);
+}
+
+// On a GPU-process crash, relaunch ONCE with hardware acceleration off. Double
+// guard (in-memory gpuRecoveryAttempted + persisted/effective gpuAccelerationDisabled)
+// guarantees we never loop: if GPU still reports gone after we've already
+// disabled it, we do nothing and fall through to the normal flow.
+function registerGpuCrashRecovery() {
+  app.on('child-process-gone', (_event, details) => {
+    if (!details || details.type !== 'GPU') {
+      return;
+    }
+    const reason = details.reason || '';
+    const isCrash = ['crashed', 'abnormal-exit', 'oom', 'launch-failed', 'integrity-failure'].includes(reason);
+    if (!isCrash) {
+      return; // 'killed'/'clean-exit' during normal shutdown — ignore
+    }
+    if (isShuttingDown || gpuRecoveryAttempted || gpuAccelerationDisabled) {
+      if (logger) {
+        logger.warn('[gpu] GPU process gone but recovery already handled/disabled', { reason });
+      }
+      return;
+    }
+    gpuRecoveryAttempted = true;
+    gpuAccelerationDisabled = true;
+    if (logger) {
+      logger.error('[gpu] GPU process crashed — persisting software-render fallback and relaunching once', { reason, exitCode: details.exitCode });
+    }
+    persistDisableGpuFlag();
+    app.relaunch();
+    app.exit(0);
   });
 }
 
@@ -946,6 +1021,41 @@ function createMainWindow() {
         }
       })
       .catch(() => {});
+  });
+
+  // F7: a compute-heavy chart render can wedge the renderer for >~30s with no
+  // crash; without this the UI just freezes and the user must force-kill. Offer
+  // a reload instead. (Distinct from render-process-gone, which is a crash.)
+  mainWindow.webContents.on('unresponsive', () => {
+    if (logger) {
+      logger.warn('[renderer] unresponsive (UI frozen) — offering reload');
+    }
+    if (!mainWindow || mainWindow.isDestroyed() || isShuttingDown) {
+      return;
+    }
+    dialog
+      .showMessageBox(mainWindow, {
+        type: 'warning',
+        title: '星阙无响应',
+        message: '界面暂时无响应，可能正在处理繁重的排盘计算。',
+        detail: '可以继续等待，或重新加载界面（不会丢失已保存的命盘数据）。',
+        buttons: ['继续等待', '重新加载'],
+        defaultId: 0,
+        cancelId: 0,
+      })
+      .then((result) => {
+        if (result.response === 1 && mainWindow && !mainWindow.isDestroyed()) {
+          showLoadingScreen().catch(() => {});
+          startRuntimeFlow({ restart: runtimeManager && runtimeManager.getState().status !== 'ready' }).catch(() => {});
+        }
+      })
+      .catch(() => {});
+  });
+
+  mainWindow.webContents.on('responsive', () => {
+    if (logger) {
+      logger.info('[renderer] responsive again');
+    }
   });
 
   mainWindow.webContents.on('did-finish-load', () => {
@@ -1478,7 +1588,16 @@ async function promptForDownload(info) {
   setUpdateProgressBar(0);
   showDownloadProgressWindow(info);
   try {
-    await updater.downloadUpdate();
+    // Guard against a stalled download (half-open TCP after laptop sleep/resume,
+    // captive portal, dead mirror): without a timeout the promise can hang forever,
+    // leaving status stuck on 'downloading' and the progress window open with no
+    // way to recover until app restart. 30 min is generous for the ~760MB installer
+    // even on a slow link; on timeout we fall through to the existing catch.
+    await withTimeout(
+      updater.downloadUpdate(),
+      UPDATE_DOWNLOAD_TIMEOUT_MS,
+      '下载更新超时（网络中断或连接被挂起）'
+    );
   } catch (error) {
     closeDownloadProgressWindow();
     setUpdateProgressBar(-1);
@@ -2236,11 +2355,44 @@ function installProcessSafetyNet() {
   });
 }
 
+// F6: on laptop suspend, flush window state before the OS hibernates; on resume,
+// re-probe the embedded backend (its sockets/ports may be stale after a long
+// sleep) and let the existing repair/restart flow recover if it's not ready.
+function installPowerMonitor() {
+  try {
+    powerMonitor.on('suspend', () => {
+      if (logger) {
+        logger.info('[power] system suspend — flushing window state');
+      }
+      try {
+        saveWindowState();
+      } catch (_error) {
+        // best-effort
+      }
+    });
+    powerMonitor.on('resume', () => {
+      // Diagnostic breadcrumb only: if the backend's sockets went stale during a
+      // long sleep, the renderer's fetchChart transparent-retry + the bounded
+      // runtime auto-restart already recover it on the next chart request. We log
+      // so post-resume "service not ready" reports are explainable.
+      if (logger) {
+        const status = runtimeManager && runtimeManager.getState ? runtimeManager.getState().status : 'n/a';
+        logger.info('[power] system resume', { runtimeStatus: status });
+      }
+    });
+  } catch (error) {
+    if (logger) {
+      logger.warn('Failed to install power monitor', error && error.message);
+    }
+  }
+}
+
 async function bootstrap() {
   fs.mkdirSync(horosaDataRoot, { recursive: true });
   fs.mkdirSync(path.join(app.getPath('userData'), 'logs'), { recursive: true });
   logger = createLogger(path.join(app.getPath('userData'), 'logs'));
   installProcessSafetyNet();
+  installPowerMonitor();
   logger.info('Starting Horosa desktop app');
 
   runtimeManager = new RuntimeManager({
@@ -2347,6 +2499,11 @@ async function bootstrap() {
   publishCurrentStates();
   await startRuntimeFlow();
 }
+
+// Must run synchronously during module eval (before app 'ready' fires) for
+// disableHardwareAcceleration() to take effect.
+applyPersistedGpuPreference();
+registerGpuCrashRecovery();
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
