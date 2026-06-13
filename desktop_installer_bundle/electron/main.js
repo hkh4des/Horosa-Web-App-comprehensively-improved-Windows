@@ -1002,6 +1002,14 @@ function createMainWindow() {
     if (logger) {
       logger.error('Renderer process gone', details);
     }
+    // During a planned shutdown / update-install the runtime is already being
+    // torn down (isShuttingDown=true while runtimeManager.stop() runs ~13s); a
+    // renderer crash in that window must NOT pop a reload dialog whose "重新加载"
+    // would race startRuntimeFlow against the in-flight stop(). Mirror the guard
+    // already in the 'unresponsive' and runtime-error handlers.
+    if (isQuitting || isShuttingDown) {
+      return;
+    }
     dialog
       .showMessageBox(mainWindow, {
         type: 'error',
