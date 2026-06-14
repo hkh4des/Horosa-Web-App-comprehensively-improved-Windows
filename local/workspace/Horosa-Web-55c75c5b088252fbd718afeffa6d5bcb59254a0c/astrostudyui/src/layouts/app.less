@@ -750,6 +750,33 @@
         box-shadow: var(--horosa-shadow);
     }
 
+    // antd Table 列筛选弹窗(portal 到 body;如主限法「筛选应星/迫星」「筛选年份」):antd 默认白底,
+    // 暗色下容器与底部按钮栏(重置/确定)成刺眼白边——补 surface/border/text 全套(变量驱动,亮暗两态都对)。
+    .ant-table-filter-dropdown {
+        border: 1px solid var(--horosa-border);
+        border-radius: var(--horosa-radius);
+        background: var(--horosa-surface-raised);
+        color: var(--horosa-text);
+        box-shadow: var(--horosa-shadow);
+        overflow: hidden;
+    }
+    .ant-table-filter-dropdown .ant-dropdown-menu {
+        background: transparent;
+        border: none;
+        box-shadow: none;
+    }
+    .ant-table-filter-dropdown-btns {
+        background: transparent;
+        border-top: 1px solid var(--horosa-border);
+    }
+    .ant-table-filter-dropdown .ant-dropdown-menu-item,
+    .ant-table-filter-dropdown .ant-checkbox-wrapper {
+        color: var(--horosa-text);
+    }
+    .ant-table-filter-dropdown .ant-dropdown-menu-item:hover {
+        background: var(--horosa-accent-soft);
+    }
+
     .ant-modal-header,
     .ant-modal-footer,
     .ant-drawer-header,
@@ -1130,6 +1157,24 @@
         color: var(--horosa-accent-strong);
     }
 
+    /* RangePicker 选区:默认浅蓝区带 + 浅字在暗模式不可读 → 区带改强调软色、端点金底深字、字色高对比。 */
+    :root[data-horosa-appearance='dark'] .ant-picker-dropdown .ant-picker-cell-in-range::before,
+    :root[data-horosa-appearance='dark'] .ant-picker-dropdown .ant-picker-cell-range-start::before,
+    :root[data-horosa-appearance='dark'] .ant-picker-dropdown .ant-picker-cell-range-end::before,
+    :root[data-horosa-appearance='dark'] .ant-picker-dropdown .ant-picker-cell-range-hover::before,
+    :root[data-horosa-appearance='dark'] .ant-picker-dropdown .ant-picker-cell-range-hover-start::before,
+    :root[data-horosa-appearance='dark'] .ant-picker-dropdown .ant-picker-cell-range-hover-end::before {
+        background: var(--horosa-accent-soft);
+    }
+    :root[data-horosa-appearance='dark'] .ant-picker-dropdown .ant-picker-cell-in-range .ant-picker-cell-inner {
+        color: var(--horosa-text);
+    }
+    :root[data-horosa-appearance='dark'] .ant-picker-dropdown .ant-picker-cell-range-start .ant-picker-cell-inner,
+    :root[data-horosa-appearance='dark'] .ant-picker-dropdown .ant-picker-cell-range-end .ant-picker-cell-inner {
+        background: var(--horosa-accent);
+        color: #1c1f26;
+    }
+
     :root[data-horosa-appearance='dark'] .ant-modal-root .ant-input,
     :root[data-horosa-appearance='dark'] .ant-modal-root .ant-input-affix-wrapper,
     :root[data-horosa-appearance='dark'] .ant-modal-root .ant-input-number,
@@ -1189,7 +1234,7 @@
     }
 
     /* ── Drawer/Modal 内（portal 到 body，不在 .horosa-workspace-shell 内）的 Tabs / Tag / 多选chips / Collapse 暗色补齐 ──
-       报告「配置包编辑器」「新建报告」「查看输入」用到这些组件;它们不在 workspace-shell 覆盖范围内,
+       报告与各设置抽屉用到这些组件;它们不在 workspace-shell 覆盖范围内,
        不单独补 dark 规则就会在暗色下看不清(灰字暗底)。 */
     :root[data-horosa-appearance='dark'] .ant-drawer .ant-tabs-tab,
     :root[data-horosa-appearance='dark'] .ant-modal-root .ant-tabs-tab {
@@ -5701,6 +5746,89 @@
         display: none;
     }
 
+    /* 古典 tab:无 subtab,卡片依次排列;双语标题(中文+英文小字)+ 轻量分节头。 */
+    .horosa-workspace-shell .horosa-classical-scroll {
+        padding: 2px 8px 8px 0;
+    }
+    .horosa-workspace-shell .horosa-classical-scroll .horosa-classical-card {
+        margin-bottom: 10px;
+        padding: 11px 13px 12px;
+        border-radius: 8px;
+        transition: border-color 0.16s ease, background 0.16s ease;
+    }
+    .horosa-workspace-shell .horosa-classical-scroll .horosa-classical-card:hover {
+        border-color: rgba(215, 173, 105, 0.34);
+    }
+    .horosa-workspace-shell .horosa-classical-card-title {
+        display: flex;
+        align-items: baseline;
+        gap: 7px;
+        margin-bottom: 8px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid rgba(215, 173, 105, 0.14);
+    }
+    .horosa-workspace-shell .horosa-classical-zh {
+        color: #d8c5a7;
+        font-size: 14px;
+        font-weight: 720;
+        letter-spacing: 0.4px;
+        /* 中文标题恒不换行;英文标题占余宽自然换行(长英文不再把中文挤断) */
+        white-space: nowrap;
+        flex: 0 0 auto;
+    }
+    :root[data-horosa-appearance='light'] .horosa-workspace-shell .horosa-classical-zh {
+        color: var(--horosa-text);
+    }
+    .horosa-workspace-shell .horosa-classical-en {
+        color: var(--horosa-astro-muted);
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.3px;
+        opacity: 0.85;
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+    .horosa-workspace-shell .horosa-classical-line {
+        line-height: 1.95;
+        overflow-wrap: anywhere;
+    }
+    /* 分节头:金色细竖条 + 中英 + 右侧渐隐细线 */
+    .horosa-workspace-shell .horosa-classical-section {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 16px 2px 9px;
+        padding-left: 9px;
+        border-left: 3px solid var(--horosa-astro-gold, #c9a86a);
+    }
+    .horosa-workspace-shell .horosa-classical-section:first-child {
+        margin-top: 2px;
+    }
+    .horosa-workspace-shell .horosa-classical-section::after {
+        content: '';
+        flex: 1 1 auto;
+        height: 1px;
+        margin-left: 2px;
+        background: linear-gradient(90deg, rgba(201, 168, 106, 0.26), transparent);
+    }
+    .horosa-workspace-shell .horosa-classical-section-zh {
+        color: var(--horosa-astro-gold, #c9a86a);
+        font-size: 13px;
+        font-weight: 760;
+        letter-spacing: 1.5px;
+    }
+    .horosa-workspace-shell .horosa-classical-section-en {
+        color: var(--horosa-astro-muted);
+        font-size: 10px;
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+        opacity: 0.7;
+    }
+    .horosa-workspace-shell .horosa-classical-card .horosa-empty-line {
+        font-style: italic;
+        opacity: 0.72;
+    }
+
     .horosa-workspace-shell .horosa-empty-line {
         color: var(--horosa-astro-muted);
         font-size: 13px;
@@ -9054,6 +9182,8 @@
 
     .horosa-workspace-shell .horosa-liureng-redesign .horosa-liureng-redesign-grid {
         display: grid !important;
+        /* 显式锁死隐式行:不声明时靠各 panel min-height:0 间接收敛,一旦失败中间栏 host 比可视区高 → 图面越底 */
+        grid-template-rows: minmax(0, 1fr);
         grid-template-columns: clamp(285px, 20vw, 330px) minmax(520px, 1fr) clamp(335px, 25vw, 400px);
         gap: 4px;
         min-height: 0;
@@ -9842,6 +9972,8 @@
 
     .horosa-workspace-shell .horosa-taiyi-redesign .horosa-taiyi-redesign-grid {
         display: grid !important;
+        /* 显式锁死隐式行:不声明时靠各 panel min-height:0 间接收敛,一旦失败中间栏 host 比可视区高 → 图面越底 */
+        grid-template-rows: minmax(0, 1fr);
         grid-template-columns: clamp(285px, 20vw, 330px) minmax(520px, 1fr) clamp(335px, 25vw, 400px);
         gap: 4px;
         min-height: 0;
@@ -10055,8 +10187,10 @@
         display: block;
         width: 100%;
         height: 100%;
-        max-width: none;
-        max-height: none;
+        /* 钳制为 100%:JS 侧给 svg 的显式像素若因测量过期偏大,flex 居中会把溢出均分到上下 →
+           顶部(农历行)被裁。max 100% 让 svg 永不大于 wrap,meet 模式下视觉等价、裁切不可能发生。 */
+        max-width: 100%;
+        max-height: 100%;
     }
 
     .horosa-workspace-shell .horosa-taiyi-redesign .horosa-taiyi-info-panel {

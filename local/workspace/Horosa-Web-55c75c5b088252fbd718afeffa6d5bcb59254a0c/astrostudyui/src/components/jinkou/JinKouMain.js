@@ -11,7 +11,7 @@ import JinKouChart from './JinKouChart';
 import JinKouRelationMini from './JinKouRelationMini';
 import { buildJinKouData, fetchJinKouPan, normalizeKinjinkouData } from './JinKouCalc';
 import { resolveJinKouDiFen } from './JinKouState';
-import { saveModuleAISnapshot, loadModuleAISnapshot } from '../../utils/moduleAiSnapshot';
+import { saveModuleAISnapshot, saveModuleAISnapshotLazy, loadModuleAISnapshot } from '../../utils/moduleAiSnapshot';
 import {
 	XQButton as Button,
 	XQSelect as Select,
@@ -944,7 +944,7 @@ class JinKouMain extends Component{
 		});
 		const jinkouData = normalizeKinjinkouData(jinkouPan || this.state.jinkouPan, localJinKouData);
 		const appliedBirth = getAppliedBirth(this.state);
-		saveModuleAISnapshot('jinkou', buildJinKouSnapshotText(
+		saveModuleAISnapshotLazy('jinkou', ()=>buildJinKouSnapshotText(
 			saveParams,
 			liureng,
 			runyear,

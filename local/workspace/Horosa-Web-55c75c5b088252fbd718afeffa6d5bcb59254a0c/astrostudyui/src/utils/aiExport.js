@@ -1,6 +1,8 @@
 import { getStore, } from './storageutil';
+import request from './request';
+import * as ExportConstants from './constants';
 import { defaultAfter23NewDay, defaultLateZiHourUseNextDay } from './dayBoundary';
-import { getAstroAISnapshotForCurrent, saveAstroAISnapshot, loadAstroAISnapshot, } from './astroAiSnapshot';
+import { getAstroAISnapshotForCurrent, saveAstroAISnapshot, loadAstroAISnapshot, buildClassicalAnalysisSection, } from './astroAiSnapshot';
 import { loadModuleAISnapshot, } from './moduleAiSnapshot';
 import * as AstroConst from '../constants/AstroConst';
 import * as AstroText from '../constants/AstroText';
@@ -115,8 +117,13 @@ const AI_EXPORT_SETTINGS_KEY = 'horosa.ai.export.settings.v1';
 // v24 — 占星双盘技法补「本命盘配置/时段盘配置」段(返照/小限/太阳弧/流年/主限法盘/行星弧/Vedic/Jayne):预测快照把旧[星盘信息]
 //        拆成[本命盘配置]+[时段盘配置]、主限法盘加[主限法盘配置]。自定义过导出段的老用户原会被静默删→同 v22/v23 范式
 //        (补 preset + 升版 union + 星盘信息→时段盘配置 legacy map)。
-export const AI_EXPORT_SETTINGS_VERSION = 24;
-const AI_EXPORT_SECTION_MIGRATION_VERSION = 24;
+// v25 — 古典占星补全:西占快照新增[古典]段(逐曜古典状态 出界/偕日相/喜乐/宗派/野逸/度数性质·阳阴/月站/远地点/单度·九分·Darijan
+//        + 围攻详断 surround.besiegement)。astrochart/astrochart_like/indiachart/mundane 预设补[古典];同 v22/v23 范式
+//        (补 preset + 升版 union → 自定义过导出段的老用户也并入[古典])。
+// v26 — 古典格局派生分析:astrochart/astrochart_like 预设补[古典格局](护卫/优势相位/相位动态/逐题主星/偶然尊贵/
+//        恒星/行星时/埃及历/巴比伦,由 analyze_chart 按需 fetch 拼入,与 AI 挂载同源)。同 v22 范式(补 preset + 升版 union)。
+export const AI_EXPORT_SETTINGS_VERSION = 26;
+const AI_EXPORT_SECTION_MIGRATION_VERSION = 26;
 const AI_EXPORT_SECTION_MIGRATION_KEYS = [
 	// v18 补:占星/星运核心 + 卜卦/择日(此前漏登记)。务必与新增「有 preset 的技法」同步(aiExport.test 跨系统自检守)。
 	'astrochart',
@@ -256,7 +263,7 @@ const AI_EXPORT_TECHNIQUES = [
 	{ key: 'astrochart_like', label: '十三分盘/占星地图' },
 	{ key: 'mundane', label: '世俗盘' },
 	{ key: 'relative', label: '合盘' },
-	{ key: 'primarydirect', label: '星运-主/界限法' },
+	{ key: 'primarydirect', label: '星运-主限法' },
 	{ key: 'primarydirchart', label: '星运-主限法盘' },
 	{ key: 'zodialrelease', label: '星运-黄道星释' },
 	{ key: 'firdaria', label: '星运-法达星限' },
@@ -319,12 +326,12 @@ const AI_EXPORT_TECHNIQUES = [
 const AI_EXPORT_PRESET_SECTIONS = {
 	horary: ['起卦信息', '根本性', '征象星指派', '完成分析', '月亮的故事', '相位全览', '裁决', '应期方位', '描述'],
 	election: ['起盘信息', '总评', '红线', '分项', '用事专属', '应期', '本命合参', '时势合参', '建议'],
-	astrochart: ['起盘信息', '宫位宫头', '星与虚点', '信息', '相位', '行星', '希腊点', '12分度', '主宰星链', '寿命格局', '可能性'],
-	indiachart: ['星盘信息', '起盘信息', '信息', '相位', '行星', '希腊点', '可能性'],
-	astrochart_like: ['起盘信息', '宫位宫头', '星与虚点', '信息', '相位', '行星', '希腊点', '12分度', '主宰星链', '寿命格局', '可能性'],
-	mundane: ['世俗入宫', '新月图', '满月图', '日食图', '月食图', '地区盘', '行星周期', '世俗宫义', '起盘信息', '宫位宫头', '星与虚点', '信息', '相位', '行星', '希腊点', '12分度', '主宰星链', '寿命格局', '可能性'],
+	astrochart: ['起盘信息', '宫位宫头', '星与虚点', '信息', '相位', '行星', '希腊点', '12分度', '主宰星链', '古典', '古典格局', '寿命格局', '可能性'],
+	indiachart: ['星盘信息', '起盘信息', '信息', '相位', '行星', '希腊点', '古典', '可能性'],
+	astrochart_like: ['起盘信息', '宫位宫头', '星与虚点', '信息', '相位', '行星', '希腊点', '12分度', '主宰星链', '古典', '古典格局', '寿命格局', '可能性'],
+	mundane: ['世俗入宫', '新月图', '满月图', '日食图', '月食图', '地区盘', '行星周期', '世俗宫义', '起盘信息', '宫位宫头', '星与虚点', '信息', '相位', '行星', '希腊点', '12分度', '主宰星链', '古典', '寿命格局', '可能性'],
 	relative: ['关系起盘信息', 'A对B相位', 'B对A相位', 'A对B中点相位', 'B对A中点相位', 'A对B映点', 'A对B反映点', 'B对A映点', 'B对A反映点', '合成图盘', '影响图盘-星盘A', '影响图盘-星盘B'],
-	primarydirect: ['出生时间', '星盘信息', '主/界限法设置', '主/界限法表格'],
+	primarydirect: ['出生时间', '星盘信息', '主限法设置', '主限法表格', '主/界限法设置', '主/界限法表格'],
 	distributions: ['界推运（分配法 / Distributions）'],
 	agepoint: ['年龄推进点（Age Point / Huber）'],
 	primarydirchart: ['出生时间', '星盘信息', '主限法盘设置', '本命盘配置', '主限法盘配置', '主限法盘说明'],
@@ -1655,8 +1662,9 @@ function resolveActiveContext(){
 	};
 
 	const predictiveLabelMap = [
-		{ label: '主/界限法', key: 'primarydirect', name: '星运-主/界限法' },
+		// 「主限法盘」必须排在「主限法」前:匹配用 subLabel.includes(label),「主限法盘」包含「主限法」。
 		{ label: '主限法盘', key: 'primarydirchart', name: '星运-主限法盘' },
+		{ label: '主限法', key: 'primarydirect', name: '星运-主限法' },
 		{ label: '黄道星释', key: 'zodialrelease', name: '星运-黄道星释' },
 		{ label: '法达星限', key: 'firdaria', name: '星运-法达星限' },
 		{ label: '界推运', key: 'distributions', name: '星运-界推运' },
@@ -1723,7 +1731,7 @@ function resolveActiveContext(){
 	}
 
 	if(topLabel.includes('星运') || topLabel.includes('推运盘')){
-		const subTabs = findTabsContainerByLabels(topPane, ['主/界限法', '黄道星释', '法达星限', '小限法', '太阳弧', '太阳返照', '月亮返照', '流年法', '十年大运'], false);
+		const subTabs = findTabsContainerByLabels(topPane, ['主限法', '黄道星释', '法达星限', '小限法', '太阳弧', '太阳返照', '月亮返照', '流年法', '十年大运'], false);
 		const subActiveTab = subTabs ? getTabsNavItems(subTabs).find((n)=>n.classList.contains('ant-tabs-tab-active')) : null;
 		const subLabel = textOf(subActiveTab);
 		context.subLabel = subLabel || '';
@@ -2000,7 +2008,7 @@ function resolveContextByAstroState(){
 			return null;
 		}
 		const predictiveMap = {
-			primarydirect: { key: 'primarydirect', displayName: '星运-主/界限法', domain: 'predictive_raw' },
+			primarydirect: { key: 'primarydirect', displayName: '星运-主限法', domain: 'predictive_raw' },
 			primarydirchart: { key: 'primarydirchart', displayName: '星运-主限法盘', domain: 'predictive_raw' },
 			zodialrelease: { key: 'zodialrelease', displayName: '星运-黄道星释', domain: 'predictive_raw' },
 			firdaria: { key: 'firdaria', displayName: '星运-法达星限', domain: 'predictive_raw' },
@@ -2186,7 +2194,7 @@ function resolveExportContextForPayload(rawContext){
 		return {
 			...context,
 			key: 'primarydirect',
-			displayName: context.displayName || '星运-主/界限法',
+			displayName: context.displayName || '星运-主限法',
 		};
 	}
 	if(context.key === 'jieqi'){
@@ -5129,7 +5137,7 @@ function getRescueExportKeys(context, fallbackStateContext, triedKeys){
 		push(contextKey);
 		return keys;
 	}
-	if(topInfo.includes('星运') || topInfo.includes('推运盘') || topInfo.includes('主/界限法') || topInfo.includes('法达星限')
+	if(topInfo.includes('星运') || topInfo.includes('推运盘') || topInfo.includes('主限法') || topInfo.includes('法达星限')
 		|| topInfo.includes('太阳弧') || topInfo.includes('太阳返照') || topInfo.includes('月亮返照')){
 		push('primarydirect', 'primarydirchart', 'firdaria', 'zodialrelease', 'profection', 'solararc', 'solarreturn', 'lunarreturn', 'givenyear', 'decennials', 'planetaryages', 'vedicprog', 'jaynesprog', 'planetaryarc', 'persiandirected', 'yearsystem129', 'balbillus', 'triplicityrulers', 'keypoints', 'lunationphase', 'extrareturns');
 	}
@@ -5296,6 +5304,40 @@ async function extractContentByKey(exportKey, context){
 	return extractGenericContent(context);
 }
 
+// 古典格局派生分析(analyze_chart)按需 fetch — 与 AI 挂载同源(astroAiSnapshot.buildClassicalAnalysisSection)。
+// 仅导出 astrochart/astrochart_like 时拉,优雅降级(失败/无参数返回 '')。~50ms 级,不进每盘预建快照。
+async function fetchAstroClassicalAnalysisSectionForExport(){
+	try{
+		const store = getStore();
+		const chartObj = store && store.astro ? store.astro.chartObj : null;
+		const raw = chartObj && chartObj.params ? chartObj.params : null;
+		if(!raw){
+			return '';
+		}
+		// chartObj.params 用合并的 birth「YYYY-MM-DD HH:mm:ss」,无独立 date/time → 须像 chartParams 那样拆出,
+		// 否则 /astroextra/analysis 报 miss.date。无 date 则直接放弃(静默,不发请求、不弹错)。
+		const birthParts = `${raw.birth || ''}`.split(' ');
+		const params = {
+			...raw,
+			date: raw.date || birthParts[0],
+			time: raw.time || birthParts[1] || '12:00:00',
+		};
+		// 守 (HIGH-4):缺 date/zone/lat/lon 任一都静默 skip(后端必校验,缺则 4xx)。
+		if(!params.date || !params.zone || params.lat === undefined || params.lat === null || params.lon === undefined || params.lon === null){
+			return '';
+		}
+		const data = await request(`${ExportConstants.ServerRoot}/astroextra/analysis`, {
+			body: JSON.stringify({ ...params, fixedStarOrb: 1 }),
+			silent: true,
+			timeoutMs: 20000,
+		});
+		const analysis = data && data.Result ? data.Result : data;
+		return buildClassicalAnalysisSection(analysis) || '';
+	}catch(e){
+		return '';
+	}
+}
+
 async function buildPayload(){
 	const context = resolveExportContextForPayload(withStoreContextFallback(resolveActiveContext()));
 	const exportKey = normalizeExportKey(context.key);
@@ -5340,6 +5382,13 @@ async function buildPayload(){
 		}
 	}
 
+	// 古典格局派生分析按需拼入(仅西占主盘/十三分盘),置于段过滤前 → 受「古典格局」导出段开关控制、不遗漏。
+	if(usedExportKey === 'astrochart' || usedExportKey === 'astrochart_like'){
+		const classicalAnalysis = await fetchAstroClassicalAnalysisSectionForExport();
+		if(classicalAnalysis){
+			content = `${`${content || ''}`.trim()}\n\n${classicalAnalysis}`.trim();
+		}
+	}
 	const rawSnapshotContent = stripForbiddenSections(content, usedExportKey);
 	content = applyUserSectionFilterByContext(rawSnapshotContent, usedExportKey);
 	let planetSettingKey = usedExportKey;

@@ -28,7 +28,7 @@ function buildDayBoundaryMeta(after23NewDay, lateZiHourUseNextDay){
 		note: `本盘排盘规则：日柱开关【${dayLabel}】+ 时柱开关【${hourLabel}】。23:00–23:59 范围内,日柱与时柱按上述规则计算;其他时辰两个开关均不影响。`,
 	};
 }
-import { buildAstroSnapshotContent, loadAstroAISnapshot } from './astroAiSnapshot';
+import { buildAstroSnapshotContent, loadAstroAISnapshot, buildClassicalAnalysisSection } from './astroAiSnapshot';
 import { getCaseTypeLabel, getCaseTypeMeta, listLocalCases } from './localcases';
 import { listLocalCharts } from './localcharts';
 import { loadModuleAISnapshot, saveModuleAISnapshot } from './moduleAiSnapshot';
@@ -125,7 +125,7 @@ export const ANALYSIS_TECHNIQUE_LABELS = {
 	jieqi_xiazhi: '节气盘-夏至',
 	jieqi_qiufen: '节气盘-秋分',
 	jieqi_dongzhi: '节气盘-冬至',
-	primarydirect: '星运-主/界限法',
+	primarydirect: '星运-主限法',
 	primarydirchart: '星运-主限法盘',
 	zodialrelease: '星运-黄道星释',
 	firdaria: '星运-法达星限',
@@ -1629,7 +1629,7 @@ async function regenerateChartTechniqueSnapshot(record, key){
 			}
 			// 显式把用户配置的方位法/时间换算/方向类型/顺逆/映点/界回填进快照 params——与 fetchChart
 			// 复算所用 fieldParams 同源(buildFieldObject)，不依赖后端是否把请求参回显进 Result.params。
-			// 否则 [主/界限法设置] 段的「向运方向/映点迫星/界迫星」会误显默认值(顺向/否/否)。
+			// 否则 [主限法设置] 段的「向运方向/映点迫星/界迫星」会误显默认值(顺向/否/否)。
 			const pdFields = buildFieldObject(record);
 			const snapshotChartObj = {
 				...chartObj,
@@ -1930,48 +1930,73 @@ function hasMatchingSavedAstroSnapshot(record){
 	return snapshot;
 }
 
+// 古典格局派生分析(analyze_chart)按需 fetch — 优雅降级(失败/异常返回 '',不影响 AI 主体)。
+// ~50ms 级(仅极区 heliacal 才慢),只在 AI 实际取数时拉,绝不进每盘预建快照 → 信息tab 不受拖累。
+async function fetchClassicalAnalysisSection(params){
+	// 守 (HIGH-5):缺 date/zone/lat/lon 任一都静默 skip,后端必校验,缺则 4xx 易经 silent 漏到顶栏。
+	if(!params || !params.date || !params.zone || params.lat === undefined || params.lat === null || params.lon === undefined || params.lon === null){
+		return '';
+	}
+	try{
+		const data = await request(`${Constants.ServerRoot}/astroextra/analysis`, {
+			body: JSON.stringify({ ...params, fixedStarOrb: 1 }),
+			silent: true,
+			timeoutMs: 20000,
+		});
+		const analysis = data && data.Result ? data.Result : data;
+		return buildClassicalAnalysisSection(analysis) || '';
+	}catch(e){
+		return '';
+	}
+}
+
 async function buildChartContext(source){
 	const record = source && source.record ? source.record : null;
 	if(!record){
 		throw new Error('chart.source.required');
 	}
+	const fields = buildFieldObject(record);
+	const params = fieldParams(fields);
+	let content;
+	let meta;
 	const saved = hasMatchingSavedAstroSnapshot(record);
 	if(saved){
-		return {
-			content: `${saved.content || ''}`.trim(),
-			title: source.title,
-			module: 'astrochart',
-			meta: {
-				sourceType: 'chart',
-				sourceId: source.id,
-				birth: record.birth || '',
-				zone: record.zone || '',
-				reusedStoredSnapshot: true,
-			},
-		};
-	}
-	const fields = buildFieldObject(record);
-	const rsp = await fetchChart({
-		...fieldParams(fields),
-		includePrimaryDirection: false,
-	}, {
-		silent: true,
-		timeoutMs: 20000,
-	});
-	if(!rsp || !rsp.Result){
-		throw new Error('chart.context.failed');
-	}
-	const content = buildAstroSnapshotContent(rsp.Result, fields) || '';
-	return {
-		content: `${content}`.trim(),
-		title: source.title,
-		module: 'astrochart',
-		meta: {
+		content = `${saved.content || ''}`.trim();
+		meta = {
 			sourceType: 'chart',
 			sourceId: source.id,
 			birth: record.birth || '',
 			zone: record.zone || '',
-		},
+			reusedStoredSnapshot: true,
+		};
+	}else{
+		// 修(HIGH-6):fetchChart 失败时不再 throw(原代码 throw 上传至 AI 主流程 → 红屏「构造命盘上下文失败」)。
+		// 优雅退化:返回空 content + reused-snapshot-style meta,AI 可降级使用既有片段或提示用户。
+		let rsp = null;
+		try{
+			rsp = await fetchChart({ ...params, includePrimaryDirection: false }, { silent: true, timeoutMs: 20000 });
+		}catch(e){
+			rsp = null;
+		}
+		content = (rsp && rsp.Result) ? `${buildAstroSnapshotContent(rsp.Result, fields) || ''}`.trim() : '';
+		meta = {
+			sourceType: 'chart',
+			sourceId: source.id,
+			birth: record.birth || '',
+			zone: record.zone || '',
+			chartFetchFailed: !(rsp && rsp.Result),
+		};
+	}
+	// 古典格局派生分析(护卫/优势相位/相位动态/逐题主星/偶然尊贵/恒星/行星时/埃及历/巴比伦)按需拼入 → AI 挂载不遗漏。
+	const analysisSection = await fetchClassicalAnalysisSection(params);
+	if(analysisSection){
+		content = `${content}\n\n${analysisSection}`.trim();
+	}
+	return {
+		content,
+		title: source.title,
+		module: 'astrochart',
+		meta,
 	};
 }
 

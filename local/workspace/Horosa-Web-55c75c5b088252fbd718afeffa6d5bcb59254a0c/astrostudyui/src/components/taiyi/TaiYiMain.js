@@ -1,7 +1,7 @@
-import { Component } from 'react';
+import { Component, createRef } from 'react';
 import { message, Spin } from 'antd';
 import { XQButton as Button, XQSelect as Select, XQTabs as Tabs } from '../xq-ui';
-import { saveModuleAISnapshot } from '../../utils/moduleAiSnapshot';
+import { saveModuleAISnapshotLazy } from '../../utils/moduleAiSnapshot';
 import { fetchPreciseNongli } from '../../utils/preciseCalcBridge';
 import GeoCoordModal from '../amap/GeoCoordModal';
 import PlusMinusTime from '../astro/PlusMinusTime';
@@ -67,6 +67,10 @@ class TaiYiMain extends Component {
 		this.unmounted = false;
 		this.timeHook = {};
 		this.taiyiRequestSeq = 0;
+		// 顶部遮挡兜底:实测盘面可视盒,svg 用显式像素钳进盒内(见 componentDidMount 的 measure)。
+		this.boardHostRef = createRef();
+		this.boardSize = null;
+		this.boardObserver = null;
 		this.onOptionChange = this.onOptionChange.bind(this);
 		this.onFieldsChange = this.onFieldsChange.bind(this);
 		this.onTimeChanged = this.onTimeChanged.bind(this);
@@ -114,6 +118,10 @@ class TaiYiMain extends Component {
 			};
 			window.addEventListener('horosa:late-zi-hour-mode-changed', this._lateZiHourListener);
 		}
+		// 顶部遮挡兜底(双保险):无论哪层容器样式失配,svg 元素都不大于「实测可视盒 ∩ 视口」,
+		// meet 模式下视觉等价但顶部(农历行)永不被裁。canvas 在首帧可能尚未渲染(pan 未回来),
+		// 故 didMount/didUpdate 都尝试挂载(只挂一次)。
+		this.ensureBoardObserver();
 		if (this.restoreFromCurrentCase(true)) {
 			return;
 		}
@@ -123,6 +131,7 @@ class TaiYiMain extends Component {
 	}
 
 	componentDidUpdate(prevProps) {
+		this.ensureBoardObserver();
 		if (prevProps.fields !== this.props.fields && this.props.fields) {
 			if (this.restoreFromCurrentCase(false)) {
 				return;
@@ -131,8 +140,71 @@ class TaiYiMain extends Component {
 		}
 	}
 
+	ensureBoardObserver(){
+		if(this.unmounted){
+			return;
+		}
+		if(typeof window === 'undefined' || typeof window.ResizeObserver !== 'function' || !this.boardHostRef.current){
+			return;
+		}
+		const el = this.boardHostRef.current;
+		// loading/Spin 切换会重建 canvas 子树 → ref 指向新元素而 observer 还盯着旧节点(永不再触发)。
+		// 每次 didUpdate 校验观察目标,变了就换绑并立即量一次。
+		if(this.boardObserver && this.boardObservedEl === el){
+			return;
+		}
+		const measure = ()=>{
+			try{
+				const node = this.boardHostRef.current;
+				if(!node){
+					return;
+				}
+				const r = node.getBoundingClientRect();
+				const w = Math.min(r.width, (window.innerWidth || r.width) - r.left);
+				const h = Math.min(r.height, (window.innerHeight || r.height) - r.top);
+				if(w > 0 && h > 0 && (!this.boardSize || Math.abs(this.boardSize.w - w) > 2 || Math.abs(this.boardSize.h - h) > 2)){
+					this.boardSize = { w, h };
+					if(!this.unmounted){
+						this.forceUpdate();
+					}
+				}
+			}catch(e){
+				// 测量失败维持现状(CSS 100%)
+			}
+		};
+		this.boardMeasure = measure;
+		if(!this.boardObserver){
+			this.boardObserver = new window.ResizeObserver(measure);
+		}
+		if(this.boardObservedEl){
+			try{ this.boardObserver.unobserve(this.boardObservedEl); }catch(e){ /* 旧节点可能已脱离 */ }
+		}
+		this.boardObserver.observe(el);
+		this.boardObservedEl = el;
+		// window resize 直连兜底:RO 盯的元素若被父级重建(无 React 更新可触发重绑)会失联,
+		// window 级监听永不失联——先重绑再量当前 ref。
+		if(!this._boardWindowResize){
+			this._boardWindowResize = ()=>{
+				this.ensureBoardObserver();
+				if(this.boardMeasure){
+					this.boardMeasure();
+				}
+			};
+			window.addEventListener('resize', this._boardWindowResize);
+		}
+		measure();
+	}
+
 	componentWillUnmount() {
 		this.unmounted = true;
+		if(this.boardObserver){
+			this.boardObserver.disconnect();
+			this.boardObserver = null;
+		}
+		if(typeof window !== 'undefined' && this._boardWindowResize){
+			window.removeEventListener('resize', this._boardWindowResize);
+			this._boardWindowResize = null;
+		}
 		if(typeof window !== 'undefined' && this._dayBoundaryListener){
 			window.removeEventListener('horosa:day-boundary-changed', this._dayBoundaryListener);
 		}
@@ -274,7 +346,7 @@ class TaiYiMain extends Component {
 		}
 		this.setState({ pan, loading: false }, () => {
 			if (pan) {
-				saveModuleAISnapshot('taiyi', buildTaiyiSnapshotText(pan));
+				saveModuleAISnapshotLazy('taiyi', ()=>buildTaiyiSnapshotText(pan));
 			}
 		});
 	}
@@ -359,7 +431,8 @@ class TaiYiMain extends Component {
 			rightPanelTab: 'overview',
 		}, () => {
 			if (this.state.pan) {
-				saveModuleAISnapshot('taiyi', buildTaiyiSnapshotText(this.state.pan));
+				const pan = this.state.pan;
+				saveModuleAISnapshotLazy('taiyi', ()=>buildTaiyiSnapshotText(pan));
 			}
 		});
 		return true;
@@ -439,14 +512,27 @@ class TaiYiMain extends Component {
 			`客算:${pan.awayCal}`,
 			`太乙数:${pan.taiyiNum}`,
 		];
+		// 顶部「农历」行裁切·结构性根治(2026-06-12,用户三度实告):
+		// 历史上这里给 svg 加过「按实测可视盒算的显式像素 width/height」想兜底遮挡,但那恰恰是裁切之源——
+		// 测量在 flex 布局/窗口缩放下易过期偏大,svg 元素遂超出 wrap,而 wrap align-items:center 居中 +
+		// overflow:hidden → 顶部(农历行)被切。彻底删除内联像素覆盖:svg 只靠 viewBox + preserveAspectRatio
+		// 'xMidYMid meet' + CSS width/height:100%。meet 的定义即「整个 viewBox 等比缩放至完全装入视口」,
+		// svg 元素 == 容器尺寸(100%)永不溢出 → 数学上不可能裁切,宽高比不符时四周留白居中。无需任何 JS 测量。
+		const boardSvgStyle = { background: 'transparent', textRendering: 'geometricPrecision' };
+		// 第二道硬保险:viewBox 顶部留 24 单位 padding(底部 8)。农历行画在 y=4,几乎贴 viewBox 顶 →
+		// meet 缩放后顶部 padding 被压成 ~1px,矮窗下随时可能被亚像素/字体上沿吃掉。把 viewBox 上沿
+		// 抬到 -24,农历行上方恒有 28 单位空白,任何缩放比下都映射成肉眼可见的安全余量,绝不贴顶。
+		const VB_PAD_TOP = 24;
+		const VB_PAD_BOTTOM = 8;
+		const boardViewBox = `0 ${-VB_PAD_TOP} ${width} ${height + VB_PAD_TOP + VB_PAD_BOTTOM}`;
 		return (
-			<div className="horosa-taiyi-board-canvas">
+			<div className="horosa-taiyi-board-canvas" ref={this.boardHostRef}>
 					<div className="horosa-taiyi-board-svg-wrap">
 						<svg
 							className="horosa-taiyi-board-svg"
-							viewBox={`0 0 ${width} ${height}`}
+							viewBox={boardViewBox}
 							preserveAspectRatio="xMidYMid meet"
-							style={{ background: 'transparent', textRendering: 'geometricPrecision' }}
+							style={boardSvgStyle}
 						>
 							<circle cx={centerX} cy={centerY} r={r0} fill="none" stroke={stroke} strokeWidth="2.5" />
 							<circle cx={centerX} cy={centerY} r={r1} fill="none" stroke={stroke} strokeWidth="2" />
@@ -980,14 +1066,19 @@ class TaiYiMain extends Component {
 	}
 
 	render() {
+		// 修(用户实告:窗口缩放后农历行被中间栏上端裁掉):props.height 来自 model 写死的固定值、
+		// 永不随窗口变 → 固定像素页高在矮窗下被 flex 居中裁顶。与遁甲同款修法:有 props.height 时
+		// 页高交给 CSS('100%',外层 tabpane 已锁 calc(100vh-72px));minHeight 置 0 移除像素地板。
 		let height = this.props.height ? this.props.height : 760;
 		if (height === '100%') {
 			height = 760;
 		} else {
-			height = height - 20;
+			height = Number(height);
+			height = Number.isFinite(height) && height > 0 ? height : 760;
 		}
+		const pageHeight = this.props.height ? '100%' : height;
 		return (
-			<div className="horosa-taiyi-page horosa-astro-redesign horosa-taiyi-redesign" style={{ height: height, minHeight: height, overflow: 'hidden' }}>
+			<div className="horosa-taiyi-page horosa-astro-redesign horosa-taiyi-redesign" style={{ height: pageHeight, minHeight: 0, overflow: 'hidden' }}>
 				<div className="horosa-astro-layout horosa-astro-redesign-layout horosa-taiyi-redesign-layout">
 					<Spin spinning={this.state.loading}>
 						<div className="horosa-astro-redesign-grid horosa-taiyi-redesign-grid">
