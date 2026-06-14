@@ -1,6 +1,22 @@
 # Horosa Windows 自检日志
 
-最后更新：2026-06-12
+最后更新：2026-06-14
+
+## 2026-06-14 v2.6.7 Beta（Mac 同步 `47f59a4→6a3b7e20`（重写史 round 2）：古典占星补全 + 围攻详断 + AI 古典挂载 + AI 代理重写[修 Win#26/#28]；重建 jar；**+ 三配置文件全历史清除**）
+
+**Mac 历史重写（第二次遇）**：Mac 再次重写历史 —— 旧基线 `47f59a4` 不在新史中。桥接 clone（tmp/mac-sync-2.6.6，fetch 后新旧共存）核：旧 v2.6.6 树（`47f59a4`）vs 新 v2.6.6 树（`c978763b`）仅差 5 个 vendor/kinastro 文件 → 真实 Windows 差集 = 旧 `47f59a4` → v2.6.7 tag `6a3b7e20` = **117 文件（93 改 + 24 新）、0 删除**。**关键**：v2.6.7 tag（6a3b7e20）虽非 main（0b31eaeb）祖先（rewrite 产物，main「领先 287 commit」是图假象），但**两者 Horosa-Web 树逐字节相等（0 文件差）** → 同步到 tag = 拿 main 全部内容（含全部 AI 修 + 古典 + 提速）。逐一定点 cp 117 文件 + `apply.sh` 恢复适配（ensureField=4/isDesktopShellWindow=3/isLoopbackTarget=2 亲验）。**下次 Mac 同步基线 = `6a3b7e20`**。
+
+**同步面**：① **古典占星补全**（Python `classical_tables.py` 新增 + `astroextra.py` analyze_chart 14 键 + `perchart.py` classical ~306 行[出界/偕日相/喜乐/宗派/野逸 + setupPlanets 古典属性 + besiegementDetail 围攻详断 16 式] + `webchartsrv.py` surround besiegement 键）+ 前端「古典」「格局」两标签 + Info 格局速览（共享前端自动受益）+ 埃及历天狼偕日升高纬度修。② **AI 代理重写（修 Win#26/#28）**：`AIAnalysisProxyService.java`（+227）—— kimi-k2* 纳推理模型口径剥采样参数（**Win#26「Kimi 接口无法识别」真因 = k2 系仅允 temperature=1，代理发 0.7 → 上游 400**）+ 非流式外呼迁 JDK HttpClient（请求头自控、非 2xx 提取 error.message 前置 → **Win#28「无法配置 API 接口」错误可读化**，不再吐 SSLHandshake dump）+ `STREAM_WORKER_POOL` 有界池替每请求 new Thread + ParamHashCacheHelper 本地缓存 512MB 上限 + 定时清扫；前端预设改 `kimi-k2.6/k2.5`（旧 `kimi-k2-turbo-preview` 2026-05-25 停服）+ gemini 嵌入 `gemini-embedding-001`。**仅 astrostudy 模块改 → astrostudy install + boot clean package**。
+
+**重建 jar**：**324,257,816 B**（+3,276 vs v2.6.6）；标记核验 packaged 内 nested astrostudy-1.0.0.jar：`STREAM_WORKER_POOL`/`streamWorkerPool`/`sendUpstreamForText`/`paramhash.cache.local.maxmb` 全 =1。无新 npm 依赖。
+
+**壳层原则性移植（handoff C 节）审计 = 已满足无需改**：Mac 本批修「退出 not responding」「非首次启动卡进度」，5 原则逐条核 Windows 壳层已独立实现 —— ①退出异步 `runtimeManager.stop()` + `isQuitting/isShuttingDown` 原子去重 + RACE-006 守卫（不阻塞事件循环）②端口 `net.createServer()`（内核级非进程扫描）③可信快路径跳 O(全树) IO ④StartupGate 分阶段进度 ⑤stop 轮询。
+
+**验证**：selfcheck **10/10**（版本一致全 2.6.7 + 哨兵 45 + jar/dist-file 不旧 + 4 资产哈希一致 + doc 哈希 + latest.yml 配 exe + Ed25519 sig + app-update.yml）；umi-test **735/79 suites**（v2.6.6: 682）；古典 pytest **49 passed**（embedded python，`-k classical`；byte-perfect golden 仍 Mac 平台钉，已 -k 排除）；packaged 载荷核验（jar 标记 + classical_tables.py + perchart besiegementDetail 在位）。
+
+**三配置文件全历史清除（用户指令）**：`.editorconfig`/`.gitattributes`/`.gitignore` 从全部历史 + 全部 tag 清除（owner 选「彻底」档），只留本地（untracked + .gitignore 自忽略）。`git filter-branch --index-filter`（filter-repo 未装）`--tag-name-filter cat -- --branches --tags`；备份 3 文件 → 重写 → 还原本地 + 自忽略；refs/original 留底 + origin 旧态留底。**强推 main + 全 tag**（owner 明确授权的一次性破例，「绝不强推 main」红线的唯一例外）。
+
+**发布**：exe **760,565,633 B sha256 `5c2a441bd6a62ce794f615413d6fae5e7e51d2daca8ccf3773f73d90afcfe79f`**；blockmap `5ea2642dc7f0…`(789,253B)；latest.yml `7d89dec661bd…`(341B)；horosa-update.sig `3264f1cffe5b…`(260B)。tag v2.6.7（清史后干净 HEAD）。**回应 issue：#27（偕日升/没 + 出界）随古典批落地；#26（Kimi）+ #28（API 配置）随 AI 代理重写落地 → 三者 close**。
 
 ## 2026-06-12 v2.6.6 原地覆盖重发（Windows 壳层/安装器 10 项加固批次；同版本号；只 force tag 不 force main）
 
